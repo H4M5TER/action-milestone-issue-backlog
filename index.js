@@ -6712,22 +6712,22 @@ Support boolean input list: \`true | True | TRUE | false | False | FALSE\``);
       process.stdout.write(message + os.EOL);
     }
     exports.info = info2;
-    function startGroup(name) {
+    function startGroup2(name) {
       command_1.issue("group", name);
     }
-    exports.startGroup = startGroup;
-    function endGroup() {
+    exports.startGroup = startGroup2;
+    function endGroup2() {
       command_1.issue("endgroup");
     }
-    exports.endGroup = endGroup;
+    exports.endGroup = endGroup2;
     function group(name, fn) {
       return __awaiter(this, void 0, void 0, function* () {
-        startGroup(name);
+        startGroup2(name);
         let result;
         try {
           result = yield fn();
         } finally {
-          endGroup();
+          endGroup2();
         }
         return result;
       });
@@ -6768,17 +6768,13 @@ var creator = core.getInput("creator");
 var label = core.getInput("label");
 var octokit = github.getOctokit(token);
 var { payload, repo } = github.context;
-var { action, issue, milestone } = payload;
-async function run() {
-  if (action !== "milestoned" && action !== "demilestoned") {
-    core.error("Invalid event " + action);
+var { action, issue } = payload;
+var milestone = payload.milestone ?? issue.milestone;
+async function runIssue() {
+  if (!["milestoned", "demilestoned"].includes(action)) {
+    core.error("Invalid event for issue: " + action);
     return;
   }
-  if (issue.labels.find((v) => v.name === label)) {
-    core.info("This is already a plan.");
-    return;
-  }
-  core.info("action: " + action);
   const filter = __spreadProps(__spreadValues({}, repo), {
     creator,
     milestone: milestone.number,
@@ -6796,50 +6792,80 @@ async function run() {
   core.info(`above: ${JSON.stringify(above)}
 backlog: ${JSON.stringify(backlog)}
 below: ${JSON.stringify(below)}`);
-  let new_backlog = backlog.replace(/\r\n/g, "\n");
-  if (action === "demilestoned") {
-    const regex = new RegExp(`^- \\[[ x]\\] #${issue.number}\\s+`, "m");
-    if (new_backlog.match(regex)) {
-      core.info("removed");
-      new_backlog = new_backlog.replace(regex, "");
-    } else {
-      core.info("not existing or modified");
-    }
-  } else {
-    if (new_backlog.includes(`#${issue.number}`)) {
-      core.info("already exists");
-    } else {
-      const backlogs = new_backlog.trim().split("\n");
-      const newline = `- [${issue.state === "open" ? " " : "x"}] #${issue.number} `;
-      core.info(`backlogs: ${JSON.stringify(backlogs)}
-newline: ${newline}`);
-      const id = backlogs.findIndex((v) => {
-        const match = v.match(/#(\d+)/);
-        if (match) {
-          if (parseInt(match[1]) > issue.number)
-            return true;
-        }
-        return false;
-      });
-      if (id === -1) {
-        backlogs.push(newline);
-        core.info("appended to the end");
+  let new_backlog = backlog.replace(/\r\n/g, "\n"), regex;
+  switch (action) {
+    case "demilestoned":
+      regex = new RegExp(`^- \\[[ x]\\] #${issue.number}\\s+`, "m");
+      if (new_backlog.match(regex)) {
+        core.info("removed");
+        new_backlog = new_backlog.replace(regex, "");
       } else {
-        core.info("insert before: " + backlogs[id]);
-        backlogs[id] = newline + "\n" + backlogs[id];
+        core.info("not existing or modified");
       }
-      new_backlog = "\n" + backlogs.join("\n") + "\n";
-    }
+      break;
+    case "milestoned":
+      if (new_backlog.includes(`#${issue.number}`)) {
+        core.info("already exists");
+      } else {
+        const backlogs = new_backlog.trim().split("\n");
+        const newline = `- [${issue.state === "open" ? " " : "x"}] #${issue.number} `;
+        core.info(`backlogs: ${JSON.stringify(backlogs)}
+newline: ${newline}`);
+        const id = backlogs.findIndex((v) => {
+          const match = v.match(/#(\d+)/);
+          if (match) {
+            if (parseInt(match[1]) > issue.number)
+              return true;
+          }
+          return false;
+        });
+        if (id === -1) {
+          backlogs.push(newline);
+          core.info("appended to the end");
+        } else {
+          core.info("insert before: " + backlogs[id]);
+          backlogs[id] = newline + "\n" + backlogs[id];
+        }
+        new_backlog = "\n" + backlogs.join("\n") + "\n";
+      }
+      break;
+    default:
+      break;
   }
   core.info("new: " + JSON.stringify(new_backlog));
   const resp = await octokit.rest.issues.update(__spreadProps(__spreadValues({}, repo), {
     issue_number: plan.number,
-    body: above + new_backlog + below
+    body: above.trimEnd() + "\n" + new_backlog + below
   }));
   core.info("resp:\n" + JSON.stringify(resp));
 }
+async function runPlan() {
+  switch (action) {
+    case "closed":
+    case "reopened":
+      const resp = await octokit.rest.issues.updateMilestone(__spreadProps(__spreadValues({}, repo), {
+        milestone_number: milestone.number,
+        state: issue.state
+      }));
+      core.info(JSON.stringify(resp));
+      break;
+    default:
+      core.error("Invalid event for plan: " + action);
+      break;
+  }
+}
 try {
-  run();
+  core.startGroup("context");
+  core.info(JSON.stringify(github.context));
+  core.endGroup();
+  core.info("action: " + action);
+  if (!milestone) {
+  } else if (issue.labels.find((v) => v.name === label)) {
+    core.info("plan triggered");
+    runPlan();
+  } else {
+    runIssue();
+  }
 } catch (error2) {
   core.error(JSON.stringify(error2));
 }
